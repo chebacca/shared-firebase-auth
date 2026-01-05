@@ -1,0 +1,39 @@
+{
+    "name": "shared-firebase-auth",
+    "version": "1.0.0",
+    "description": "Shared authentication logic and context for Backbone applications",
+    "main": "src/index.ts",
+    "types": "src/index.ts",
+    "exports": {
+        ".": "./src/index.ts",
+        "./context": "./src/UnifiedAuthContext.tsx",
+        "./service": "./src/UnifiedFirebaseAuth.ts",
+        "./hook": "./src/useUnifiedAuth.ts"
+    },
+    "scripts": {
+        "type-check": "tsc --noEmit",
+        "build": "tsc"
+    },
+    "dependencies": {
+        "shared-firebase-types": "file:../shared-firebase-types"
+    },
+    "peerDependencies": {
+        "firebase": "^10.7.1",
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0"
+    },
+    "devDependencies": {
+        "@types/react": "^18.2.42",
+        "@types/react-dom": "^18.2.17",
+        "typescript": "^5.3.3"
+    },
+    "keywords": [
+        "firebase",
+        "authentication",
+        "react",
+        "context",
+        "backbone"
+    ],
+    "author": "BACKBONE Team",
+    "license": "MIT"
+}
