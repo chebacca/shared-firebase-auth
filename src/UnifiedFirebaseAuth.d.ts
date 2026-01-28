@@ -13,6 +13,8 @@ export declare class UnifiedFirebaseAuthService {
     private listeners;
     private unsubscribeAuth;
     private isListenerInitialized;
+    private offlineTokenRefreshTimer;
+    private static readonly OFFLINE_TOKEN_KEY;
     private authInstance;
     private firestoreInstance;
     private constructor();
@@ -65,6 +67,24 @@ export declare class UnifiedFirebaseAuthService {
      * Get Firebase ID token
      */
     getIdToken(forceRefresh?: boolean): Promise<string | null>;
+    /**
+     * Store an ID token for offline use (renderer environments only).
+     */
+    storeTokenForOffline(token: string, expiresAt: number): void;
+    /**
+     * Retrieve cached offline token if present and not expired.
+     */
+    getStoredToken(): string | null;
+    /**
+     * Check whether a cached offline token exists and is still valid.
+     */
+    isStoredTokenValid(): boolean;
+    /**
+     * Start a best-effort background refresh loop (renderer environments only).
+     * Refreshes token when it's within the configured window of expiry.
+     */
+    startTokenRefreshMonitor(refreshWindowSeconds?: number): void;
+    stopTokenRefreshMonitor(): void;
     /**
      * Get current auth state
      */

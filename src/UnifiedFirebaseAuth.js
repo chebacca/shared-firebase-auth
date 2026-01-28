@@ -19,6 +19,7 @@ export class UnifiedFirebaseAuthService {
         this.listeners = [];
         this.unsubscribeAuth = null;
         this.isListenerInitialized = false;
+        this.offlineTokenRefreshTimer = null;
         // Injected dependencies
         this.authInstance = null;
         this.firestoreInstance = null;
@@ -351,11 +352,108 @@ export class UnifiedFirebaseAuthService {
         if (!user)
             return null;
         try {
-            return await getIdToken(user, forceRefresh);
+            const token = await getIdToken(user, forceRefresh);
+            // Best-effort offline caching (safe no-op outside browser/Electron renderers)
+            try {
+                const tokenResult = await getIdTokenResult(user);
+                const expiresAt = Date.parse(tokenResult.expirationTime);
+                if (Number.isFinite(expiresAt)) {
+                    this.storeTokenForOffline(token, expiresAt);
+                }
+            }
+            catch {
+                // ignore
+            }
+            return token;
         }
         catch (error) {
             console.error('Error getting ID token:', error);
             return null;
+        }
+    }
+    /**
+     * Store an ID token for offline use (renderer environments only).
+     */
+    storeTokenForOffline(token, expiresAt) {
+        try {
+            if (typeof window === 'undefined' || !window.localStorage)
+                return;
+            const payload = {
+                token,
+                expiresAt,
+                storedAt: Date.now()
+            };
+            window.localStorage.setItem(UnifiedFirebaseAuthService.OFFLINE_TOKEN_KEY, JSON.stringify(payload));
+        }
+        catch {
+            // ignore storage failures
+        }
+    }
+    /**
+     * Retrieve cached offline token if present and not expired.
+     */
+    getStoredToken() {
+        try {
+            if (typeof window === 'undefined' || !window.localStorage)
+                return null;
+            const raw = window.localStorage.getItem(UnifiedFirebaseAuthService.OFFLINE_TOKEN_KEY);
+            if (!raw)
+                return null;
+            const parsed = JSON.parse(raw);
+            if (!parsed?.token || !parsed?.expiresAt)
+                return null;
+            if (Date.now() >= parsed.expiresAt)
+                return null;
+            return parsed.token;
+        }
+        catch {
+            return null;
+        }
+    }
+    /**
+     * Check whether a cached offline token exists and is still valid.
+     */
+    isStoredTokenValid() {
+        return this.getStoredToken() !== null;
+    }
+    /**
+     * Start a best-effort background refresh loop (renderer environments only).
+     * Refreshes token when it's within the configured window of expiry.
+     */
+    startTokenRefreshMonitor(refreshWindowSeconds = 300) {
+        try {
+            if (this.offlineTokenRefreshTimer)
+                return;
+            if (typeof window === 'undefined')
+                return;
+            this.offlineTokenRefreshTimer = setInterval(async () => {
+                try {
+                    const auth = this.getAuth();
+                    const user = auth.currentUser;
+                    if (!user)
+                        return;
+                    const tokenResult = await getIdTokenResult(user);
+                    const expiresAt = Date.parse(tokenResult.expirationTime);
+                    if (!Number.isFinite(expiresAt))
+                        return;
+                    const msRemaining = expiresAt - Date.now();
+                    if (msRemaining <= refreshWindowSeconds * 1000) {
+                        await this.getIdToken(true);
+                    }
+                }
+                catch {
+                    // ignore
+                }
+            }, 60000); // check every minute
+        }
+        catch {
+            // ignore
+        }
+    }
+    stopTokenRefreshMonitor() {
+        if (this.offlineTokenRefreshTimer) {
+            clearInterval(this.offlineTokenRefreshTimer);
+            this.offlineTokenRefreshTimer = null;
         }
     }
     /**
@@ -449,6 +547,8 @@ export class UnifiedFirebaseAuthService {
         };
     }
 }
+// Offline token cache key (renderer environments only)
+UnifiedFirebaseAuthService.OFFLINE_TOKEN_KEY = 'backbone_offline_id_token_v1';
 // Export singleton instance
 export const unifiedFirebaseAuth = UnifiedFirebaseAuthService.getInstance();
 // Export class for testing or separate instances

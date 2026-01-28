@@ -35,6 +35,10 @@ export class UnifiedFirebaseAuthService {
     private listeners: Array<(state: AuthState) => void> = [];
     private unsubscribeAuth: (() => void) | null = null;
     private isListenerInitialized: boolean = false;
+    private offlineTokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+    // Offline token cache key (renderer environments only)
+    private static readonly OFFLINE_TOKEN_KEY = 'backbone_offline_id_token_v1';
 
     // Injected dependencies
     private authInstance: Auth | null = null;
@@ -411,10 +415,103 @@ export class UnifiedFirebaseAuthService {
         if (!user) return null;
 
         try {
-            return await getIdToken(user, forceRefresh);
+            const token = await getIdToken(user, forceRefresh);
+
+            // Best-effort offline caching (safe no-op outside browser/Electron renderers)
+            try {
+                const tokenResult = await getIdTokenResult(user);
+                const expiresAt = Date.parse(tokenResult.expirationTime);
+                if (Number.isFinite(expiresAt)) {
+                    this.storeTokenForOffline(token, expiresAt);
+                }
+            } catch {
+                // ignore
+            }
+
+            return token;
         } catch (error) {
             console.error('Error getting ID token:', error);
             return null;
+        }
+    }
+
+    /**
+     * Store an ID token for offline use (renderer environments only).
+     */
+    public storeTokenForOffline(token: string, expiresAt: number): void {
+        try {
+            if (typeof window === 'undefined' || !window.localStorage) return;
+            const payload = {
+                token,
+                expiresAt,
+                storedAt: Date.now()
+            };
+            window.localStorage.setItem(UnifiedFirebaseAuthService.OFFLINE_TOKEN_KEY, JSON.stringify(payload));
+        } catch {
+            // ignore storage failures
+        }
+    }
+
+    /**
+     * Retrieve cached offline token if present and not expired.
+     */
+    public getStoredToken(): string | null {
+        try {
+            if (typeof window === 'undefined' || !window.localStorage) return null;
+            const raw = window.localStorage.getItem(UnifiedFirebaseAuthService.OFFLINE_TOKEN_KEY);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw) as { token?: string; expiresAt?: number };
+            if (!parsed?.token || !parsed?.expiresAt) return null;
+            if (Date.now() >= parsed.expiresAt) return null;
+            return parsed.token;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Check whether a cached offline token exists and is still valid.
+     */
+    public isStoredTokenValid(): boolean {
+        return this.getStoredToken() !== null;
+    }
+
+    /**
+     * Start a best-effort background refresh loop (renderer environments only).
+     * Refreshes token when it's within the configured window of expiry.
+     */
+    public startTokenRefreshMonitor(refreshWindowSeconds: number = 300): void {
+        try {
+            if (this.offlineTokenRefreshTimer) return;
+            if (typeof window === 'undefined') return;
+
+            this.offlineTokenRefreshTimer = setInterval(async () => {
+                try {
+                    const auth = this.getAuth();
+                    const user = auth.currentUser;
+                    if (!user) return;
+
+                    const tokenResult = await getIdTokenResult(user);
+                    const expiresAt = Date.parse(tokenResult.expirationTime);
+                    if (!Number.isFinite(expiresAt)) return;
+
+                    const msRemaining = expiresAt - Date.now();
+                    if (msRemaining <= refreshWindowSeconds * 1000) {
+                        await this.getIdToken(true);
+                    }
+                } catch {
+                    // ignore
+                }
+            }, 60_000); // check every minute
+        } catch {
+            // ignore
+        }
+    }
+
+    public stopTokenRefreshMonitor(): void {
+        if (this.offlineTokenRefreshTimer) {
+            clearInterval(this.offlineTokenRefreshTimer);
+            this.offlineTokenRefreshTimer = null;
         }
     }
 
